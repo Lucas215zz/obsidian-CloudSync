@@ -1,7 +1,7 @@
 {
   "id": "obsidian-cos-sync",
   "name": "Tencent COS Sync",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "minAppVersion": "1.0.0",
   "description": "Sync your Obsidian vault to Tencent Cloud Object Storage (COS) with real-time and scheduled sync, plus conflict-safe multi-device support.",
   "author": "Lusixian",
