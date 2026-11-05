@@ -242,7 +242,39 @@ export class SyncEngine {
     }
 
     await this.state.save()
+    // 5. 清理因删除而空置的目录（Obsidian 本身也会隐藏空目录）
+    await this.pruneEmptyDirectories(settings)
     return result
+  }
+
+  /**
+   * 删除所有「空目录」。目录不是一级同步实体，只作为文件路径的载体存在；
+   * 当目录里的文件被删除后，空目录应当被一并回收，否则会残留在本地。
+   * 按深度从深到浅删除，保证父目录在子目录清空后也能被回收。
+   */
+  private async pruneEmptyDirectories(settings: SyncSettings): Promise<void> {
+    const folders = this.vault
+      .getAllFolders()
+      .filter((f) => !f.isRoot() && !!f.path && f.path !== '/')
+      .filter((f) => !isExcludedPath(f.path + '/', settings))
+
+    folders.sort((a, b) => {
+      const da = a.path.split('/').length
+      const db = b.path.split('/').length
+      return db - da
+    })
+
+    for (const folder of folders) {
+      try {
+        const listed = await this.vault.adapter.list(folder.path)
+        if (listed.files.length === 0 && listed.folders.length === 0) {
+          await this.vault.adapter.rmdir(folder.path, false)
+          this.log(`pruned empty directory: ${folder.path}`)
+        }
+      } catch (e) {
+        this.log(`prune empty directory failed (${folder.path}): ${(e as Error)?.message || e}`)
+      }
+    }
   }
 
   /**
