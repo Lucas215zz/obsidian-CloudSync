@@ -5,9 +5,8 @@ import { SyncSettings } from './settings'
 import {
   normalizePrefix,
   isExcludedPath,
-  md5Buffer,
+  md5Of,
   isMd5Hex,
-  toArrayBuffer,
   splitPath,
   conflictPathFor,
 } from './utils'
@@ -189,8 +188,8 @@ export class SyncEngine {
     for (const op of ops) {
       switch (op.type) {
         case 'upload': {
-          const buf = Buffer.from(await this.vault.adapter.readBinary(op.path))
-          const md5 = md5Buffer(buf)
+          const buf = await this.vault.adapter.readBinary(op.path)
+          const md5 = md5Of(buf)
           const { etag } = await this.client.put(prefix + op.path, buf)
           const l = localMap.get(op.path)!
           this.state.set(op.path, {
@@ -207,12 +206,12 @@ export class SyncEngine {
           const buf = await this.client.get(prefix + op.path)
           await this.ensureParentDirs(op.path)
           await this.writeBinary(op.path, buf)
-          const md5 = md5Buffer(buf)
+          const md5 = md5Of(buf)
           const st = await this.vault.adapter.stat(op.path)
           this.state.set(op.path, {
             localMd5: md5,
             localMtime: st?.mtime ?? Date.now(),
-            localSize: st?.size ?? buf.length,
+            localSize: st?.size ?? buf.byteLength,
             remoteEtag: remoteMap.get(op.path) || '',
             syncedAt: Date.now(),
           })
@@ -263,7 +262,7 @@ export class SyncEngine {
     let remoteMd5 = remoteMd5Cache.get(path)
     if (!remoteMd5) {
       const buf = await this.client.get(prefix + path)
-      remoteMd5 = md5Buffer(buf)
+      remoteMd5 = md5Of(buf)
       remoteMd5Cache.set(path, remoteMd5)
     }
     return remoteMd5 === localMd5
@@ -271,8 +270,8 @@ export class SyncEngine {
 
   private async getLocalMd5(path: string, cache: Map<string, string>): Promise<string> {
     if (cache.has(path)) return cache.get(path)!
-    const buf = Buffer.from(await this.vault.adapter.readBinary(path))
-    const md5 = md5Buffer(buf)
+    const buf = await this.vault.adapter.readBinary(path)
+    const md5 = md5Of(buf)
     cache.set(path, md5)
     return md5
   }
@@ -286,8 +285,8 @@ export class SyncEngine {
   ): Promise<{ uploaded: number; downloaded: number }> {
     const strategy = settings.conflictStrategy
     const remoteEtag = remoteMap.get(path) || ''
-    const localBuf = Buffer.from(await this.vault.adapter.readBinary(path))
-    const localMd5 = md5Buffer(localBuf)
+    const localBuf = await this.vault.adapter.readBinary(path)
+    const localMd5 = md5Of(localBuf)
     localMd5Cache.set(path, localMd5)
     const localStat = await this.vault.adapter.stat(path)
 
@@ -297,7 +296,7 @@ export class SyncEngine {
         this.state.set(path, {
           localMd5,
           localMtime: localStat?.mtime ?? Date.now(),
-          localSize: localStat?.size ?? localBuf.length,
+          localSize: localStat?.size ?? localBuf.byteLength,
           remoteEtag: etag,
           syncedAt: Date.now(),
         })
@@ -307,12 +306,12 @@ export class SyncEngine {
         const remoteBuf = await this.client.get(prefix + path)
         if (settings.trashDeletedFiles) await this.trashOrRemove(path, settings)
         await this.writeBinary(path, remoteBuf)
-        const md5 = md5Buffer(remoteBuf)
+        const md5 = md5Of(remoteBuf)
         const st = await this.vault.adapter.stat(path)
         this.state.set(path, {
           localMd5: md5,
           localMtime: st?.mtime ?? Date.now(),
-          localSize: st?.size ?? remoteBuf.length,
+          localSize: st?.size ?? remoteBuf.byteLength,
           remoteEtag,
           syncedAt: Date.now(),
         })
@@ -324,19 +323,19 @@ export class SyncEngine {
         await this.writeBinary(conflictPath, remoteBuf)
         const { etag } = await this.client.put(prefix + path, localBuf)
         const { etag: conflictEtag } = await this.client.put(prefix + conflictPath, remoteBuf)
-        const conflictMd5 = md5Buffer(remoteBuf)
+        const conflictMd5 = md5Of(remoteBuf)
         const cst = await this.vault.adapter.stat(conflictPath)
         this.state.set(path, {
           localMd5,
           localMtime: localStat?.mtime ?? Date.now(),
-          localSize: localStat?.size ?? localBuf.length,
+          localSize: localStat?.size ?? localBuf.byteLength,
           remoteEtag: etag,
           syncedAt: Date.now(),
         })
         this.state.set(conflictPath, {
           localMd5: conflictMd5,
           localMtime: cst?.mtime ?? Date.now(),
-          localSize: cst?.size ?? remoteBuf.length,
+          localSize: cst?.size ?? remoteBuf.byteLength,
           remoteEtag: conflictEtag,
           syncedAt: Date.now(),
         })
@@ -348,20 +347,20 @@ export class SyncEngine {
         await this.writeBinary(conflictPath, localBuf)
         const { etag: conflictEtag } = await this.client.put(prefix + conflictPath, localBuf)
         await this.writeBinary(path, remoteBuf)
-        const md5 = md5Buffer(remoteBuf)
+        const md5 = md5Of(remoteBuf)
         const st = await this.vault.adapter.stat(path)
         const cst = await this.vault.adapter.stat(conflictPath)
         this.state.set(path, {
           localMd5: md5,
           localMtime: st?.mtime ?? Date.now(),
-          localSize: st?.size ?? remoteBuf.length,
+          localSize: st?.size ?? remoteBuf.byteLength,
           remoteEtag,
           syncedAt: Date.now(),
         })
         this.state.set(conflictPath, {
           localMd5,
           localMtime: cst?.mtime ?? Date.now(),
-          localSize: cst?.size ?? localBuf.length,
+          localSize: cst?.size ?? localBuf.byteLength,
           remoteEtag: conflictEtag,
           syncedAt: Date.now(),
         })
@@ -372,7 +371,7 @@ export class SyncEngine {
         this.state.set(path, {
           localMd5,
           localMtime: localStat?.mtime ?? Date.now(),
-          localSize: localStat?.size ?? localBuf.length,
+          localSize: localStat?.size ?? localBuf.byteLength,
           remoteEtag,
           syncedAt: Date.now(),
         })
@@ -381,8 +380,8 @@ export class SyncEngine {
     }
   }
 
-  private async writeBinary(path: string, buf: Buffer): Promise<void> {
-    await this.vault.adapter.writeBinary(path, toArrayBuffer(buf))
+  private async writeBinary(path: string, buf: ArrayBuffer): Promise<void> {
+    await this.vault.adapter.writeBinary(path, buf)
   }
 
   private async ensureParentDirs(path: string): Promise<void> {

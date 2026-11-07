@@ -92,4 +92,4 @@ npm run build
 
 ## 构建说明
 
-`cos-nodejs-sdk-v5` 会被 esbuild 打包进 `main.js`，Node 内置模块（`crypto`、`stream`、`http` 等）保持外部引用，由 Obsidian 的 Electron 运行时提供，因此仅支持桌面端（`isDesktopOnly: true`）。
+COS 客户端为纯 Web 实现（Obsidian `requestUrl` + Web Crypto HMAC-SHA1 签名 + js-md5），不依赖任何 Node.js 内置模块，桌面端与移动端（iOS / Android）均可用（`isDesktopOnly: false`）。签名算法参考：[COS 请求签名](https://cloud.tencent.com/document/product/436/7778)。

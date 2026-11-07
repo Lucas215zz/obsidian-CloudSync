@@ -1,19 +1,12 @@
-import { createHash } from 'crypto'
+import { md5 } from 'js-md5'
 import { SyncSettings } from './settings'
 
-export function md5Buffer(buf: Buffer): string {
-  return createHash('md5').update(buf).digest('hex')
+export function md5Of(buf: ArrayBuffer | Uint8Array): string {
+  return md5(buf instanceof Uint8Array ? buf : new Uint8Array(buf))
 }
 
 export function isMd5Hex(s: string): boolean {
   return /^[0-9a-f]{32}$/i.test(s)
-}
-
-export function toArrayBuffer(buf: Buffer): ArrayBuffer {
-  const ab = new ArrayBuffer(buf.length)
-  const view = new Uint8Array(ab)
-  view.set(buf)
-  return ab
 }
 
 export function normalizePrefix(prefix: string): string {
@@ -77,6 +70,8 @@ export function isExcludedPath(path: string, settings: SyncSettings): boolean {
     if (!settings.syncDotObsidian) return true
     if (p.startsWith('.obsidian/workspace')) return true
     if (p.includes('sync-state.json')) return true
+    // 本插件自身目录不同步：data.json 含 SecretKey 等密钥，main.js 为编译产物无需跨设备同步
+    if (p.startsWith('.obsidian/plugins/obsidian-cos-sync/')) return true
   }
   const name = splitPath(p).name
   if (name === '.DS_Store' || name === 'Thumbs.db' || name === 'desktop.ini' || name === '.git') return true

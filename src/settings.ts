@@ -35,7 +35,7 @@ export const DEFAULT_SETTINGS: SyncSettings = {
   enableRealtimeWatch: true,
   notifyOnSync: true,
   conflictStrategy: 'keepBothLocalWins',
-  syncDotObsidian: false,
+  syncDotObsidian: true,
   trashDeletedFiles: true,
   extraExclude: [],
 }
@@ -195,7 +195,7 @@ export class SyncSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('同步 .obsidian 配置')
-      .setDesc('默认不同步 .obsidian（各设备插件配置独立）。开启后同步但排除 workspace 与本插件状态文件')
+      .setDesc('开启后同步整个仓库，包括 .obsidian 目录下的插件、主题、外观、快捷键、代码片段等。自动排除 workspace 临时状态、本插件自身目录（含密钥的 data.json）与同步状态文件')
       .addToggle((t) =>
         t.setValue(this.plugin.settings.syncDotObsidian).onChange(async (v) => {
           this.plugin.settings.syncDotObsidian = v
