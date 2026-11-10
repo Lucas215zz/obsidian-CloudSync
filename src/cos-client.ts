@@ -62,20 +62,24 @@ export class CosClient {
   }
 
   /**
-   * COS XML API authorization header. We sign only the method and pathname
-   * (empty header-list / url-param-list), which COS accepts: unsigned
-   * headers and query params are simply not covered by the signature.
+   * COS XML API authorization header.
+   * Per the official SDK (cos-js-sdk-v5 `getAuth`):
+   * - The pathname in FormatString is the RAW (unencoded) object path; the
+   *   server decodes the request URL and verifies against the raw path.
+   * - The Host header is signed by default (q-header-list=host).
    */
-  private async authorization(method: string, pathname: string): Promise<string> {
+  private async authorization(method: string, rawPathname: string): Promise<string> {
     const now = Math.floor(Date.now() / 1000)
     const keyTime = `${now - 60};${now + SIGN_EXPIRE_SECONDS}`
     const signKey = await this.hmacSha1Hex(this.secretKey, keyTime)
-    const httpString = `${method.toLowerCase()}\n${pathname}\n\n\n`
+    const host = this.host()
+    // FormatString: method\npathname\nparams\nheaders\n (headers: host=...)
+    const httpString = `${method.toLowerCase()}\n${rawPathname}\n\nhost=${camSafeUrlEncode(host)}\n`
     const stringToSign = `sha1\n${keyTime}\n${await this.sha1Hex(httpString)}\n`
     const signature = await this.hmacSha1Hex(signKey, stringToSign)
     return (
       `q-sign-algorithm=sha1&q-ak=${this.secretId}&q-sign-time=${keyTime}` +
-      `&q-key-time=${keyTime}&q-header-list=&q-url-param-list=&q-signature=${signature}`
+      `&q-key-time=${keyTime}&q-header-list=host&q-url-param-list=&q-signature=${signature}`
     )
   }
 
@@ -85,6 +89,12 @@ export class CosClient {
     query?: Record<string, string>,
     body?: ArrayBuffer
   ): Promise<{ status: number; headers: Record<string, string>; arrayBuffer: ArrayBuffer; text: string }> {
+    // `pathname` here is the RAW path (may contain Chinese etc.); encode it
+    // for the request URL only, keep the raw path for the signature.
+    const encodedPathname = pathname
+      .split('/')
+      .map(camSafeUrlEncode)
+      .join('/')
     const auth = await this.authorization(method, pathname)
     const search = query
       ? '?' +
@@ -95,7 +105,7 @@ export class CosClient {
       : ''
     const param: RequestUrlParam = {
       method,
-      url: `https://${this.host()}${pathname}${search}`,
+      url: `https://${this.host()}${encodedPathname}${search}`,
       headers: { Authorization: auth },
       throw: false,
     }
@@ -166,9 +176,22 @@ export class CosClient {
   }
 }
 
-/** Encode an object key as a request path, keeping '/' separators intact. */
+/** Encode an object key as the RAW request path (signature uses the raw path). */
 function objectPathname(key: string): string {
-  return '/' + key.split('/').map(encodeURIComponent).join('/')
+  return '/' + key
+}
+
+/**
+ * The SDK's camSafeUrlEncode: encodeURIComponent plus RFC3986 strict encoding
+ * of ! ' ( ) *.
+ */
+function camSafeUrlEncode(str: string): string {
+  return encodeURIComponent(str)
+    .replace(/!/g, '%21')
+    .replace(/'/g, '%27')
+    .replace(/\(/g, '%28')
+    .replace(/\)/g, '%29')
+    .replace(/\*/g, '%2A')
 }
 
 function hexOf(bytes: Uint8Array): string {

@@ -86,6 +86,11 @@ export class SyncEngine {
       if (isExcludedPath(f.path, settings)) continue
       localMap.set(f.path, { mtime: f.stat.mtime, size: f.stat.size })
     }
+    // Vault API 不返回隐藏文件夹（如 .obsidian）里的文件，需用底层 adapter 手动遍历，
+    // 这样 syncDotObsidian 开关才能真正生效（借鉴 remotely-save 的做法）。
+    if (settings.syncDotObsidian) {
+      await this.walkHiddenDir('.obsidian', localMap, settings)
+    }
 
     // 2. Remote objects
     const remoteMap = new Map<string, string>()
@@ -244,6 +249,44 @@ export class SyncEngine {
     // 5. 清理因删除而空置的目录（Obsidian 本身也会隐藏空目录）
     await this.pruneEmptyDirectories(settings)
     return result
+  }
+
+  /**
+   * 递归遍历隐藏目录（如 .obsidian）。Vault.getFiles() 不返回隐藏文件夹里的文件，
+   * 所以用底层 adapter 手动列出，再经 isExcludedPath 过滤缓存/垃圾文件。
+   */
+  private async walkHiddenDir(
+    dir: string,
+    map: Map<string, { mtime: number; size: number }>,
+    settings: SyncSettings
+  ): Promise<void> {
+    let listed: { files: string[]; folders: string[] }
+    try {
+      listed = await this.vault.adapter.list(dir)
+    } catch {
+      return
+    }
+    // adapter.list() returns paths relative to the vault root (not bare names),
+    // so use them as-is; prefixing `dir` again would double it (e.g.
+    // ".obsidian/.obsidian/app.json") and break uploads with ENOENT.
+    for (const path of listed.files) {
+      if (isExcludedPath(path, settings)) continue
+      let mtime = 0
+      let size = 0
+      try {
+        const st = await this.vault.adapter.stat(path)
+        if (st) {
+          mtime = st.mtime ?? 0
+          size = st.size ?? 0
+        }
+      } catch {
+        // 文件可能刚被删除，跳过即可
+      }
+      map.set(path, { mtime, size })
+    }
+    for (const folder of listed.folders) {
+      await this.walkHiddenDir(folder, map, settings)
+    }
   }
 
   /**

@@ -64,18 +64,41 @@ export function matchesGlob(path: string, pattern: string): boolean {
 
 export function isExcludedPath(path: string, settings: SyncSettings): boolean {
   const p = path.replace(/\\/g, '/')
+
+  // 根级隐藏目录：回收站、Git
   if (p.startsWith('.trash/')) return true
   if (p.startsWith('.git/')) return true
+
+  // .obsidian 目录：由 syncDotObsidian 开关控制；内部临时状态与本插件自身目录永远排除
   if (p.startsWith('.obsidian/')) {
     if (!settings.syncDotObsidian) return true
-    if (p.startsWith('.obsidian/workspace')) return true
-    if (p.includes('sync-state.json')) return true
+    if (p.startsWith('.obsidian/workspace')) return true // workspace.json / workspaces.json 会话状态
+    if (p.includes('sync-state.json')) return true // 本插件同步状态文件
     // 本插件自身目录不同步：data.json 含 SecretKey 等密钥，main.js 为编译产物无需跨设备同步
     if (p.startsWith('.obsidian/plugins/obsidian-cos-sync/')) return true
   }
-  const name = splitPath(p).name
-  if (name === '.DS_Store' || name === 'Thumbs.db' || name === 'desktop.ini' || name === '.git') return true
+
+  // 路径任意层级命中「系统垃圾 / 缓存」名称 → 排除（借鉴 remotely-save）
+  const segments = p.split('/')
+  const junkNames = new Set([
+    '.git', '.github', '.gitlab', '.svn', 'node_modules',
+    '.DS_Store', '__MACOSX', 'Icon',
+    'desktop.ini', 'Desktop.ini', 'thumbs.db', 'Thumbs.db',
+  ])
+  for (const seg of segments) {
+    if (junkNames.has(seg)) return true
+  }
+
+  const name = segments[segments.length - 1]
+  // Office 临时锁文件 ~$xxx.docx
+  if (name.startsWith('~$')) {
+    const ext = (name.split('.').pop() || '').toLowerCase()
+    if (['doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx'].includes(ext)) return true
+  }
+  // 常见临时 / 备份文件
   if (name.endsWith('.tmp') || name.endsWith('.bak') || name.endsWith('.swp')) return true
+
+  // 用户自定义排除（每行一条，支持通配符）
   for (const pat of settings.extraExclude || []) {
     if (matchesGlob(p, pat)) return true
   }

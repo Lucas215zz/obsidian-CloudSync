@@ -18,6 +18,10 @@ const context = await esbuild.context({
   format: 'cjs',
   target: 'es2018',
   external: ['obsidian', 'electron', '@codemirror/*', '@lezer/*'],
+  // js-md5 detects Node via `process.versions.node` and would require crypto/buffer,
+  // which esbuild stubs to empty modules under `platform: 'browser'` (its package.json
+  // maps `crypto`/`buffer` to false), crashing at load time on desktop. Force the pure-JS path.
+  define: { 'process.versions.node': 'undefined' },
   logLevel: 'info',
   sourcemap: prod ? false : 'inline',
   treeShaking: true,
