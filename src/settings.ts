@@ -1,5 +1,6 @@
-import { App, PluginSettingTab, Setting } from 'obsidian'
+import { App, PluginSettingTab, Setting, TFolder } from 'obsidian'
 import type CosSyncPlugin from './main'
+import { normFolder } from './utils'
 
 export type ConflictStrategy =
   | 'keepBothLocalWins'
@@ -7,6 +8,9 @@ export type ConflictStrategy =
   | 'localWins'
   | 'remoteWins'
   | 'skip'
+
+/** all：全库同步，勾选的文件夹不参与；onlySelected：只同步勾选的文件夹 */
+export type SyncScopeMode = 'all' | 'onlySelected'
 
 export interface SyncSettings {
   secretId: string
@@ -22,6 +26,9 @@ export interface SyncSettings {
   syncDotObsidian: boolean
   trashDeletedFiles: boolean
   extraExclude: string[]
+  syncScopeMode: SyncScopeMode
+  scopeFolders: string[]
+  syncRootFiles: boolean
 }
 
 export const DEFAULT_SETTINGS: SyncSettings = {
@@ -38,10 +45,16 @@ export const DEFAULT_SETTINGS: SyncSettings = {
   syncDotObsidian: true,
   trashDeletedFiles: true,
   extraExclude: [],
+  syncScopeMode: 'all',
+  scopeFolders: [],
+  syncRootFiles: true,
 }
 
 export class SyncSettingTab extends PluginSettingTab {
   plugin: CosSyncPlugin
+  /** 文件夹树的展开状态与搜索词，重绘时保留 */
+  private scopeExpanded = new Set<string>()
+  private scopeQuery = ''
 
   constructor(app: App, plugin: CosSyncPlugin) {
     super(app, plugin)
@@ -164,6 +177,27 @@ export class SyncSettingTab extends PluginSettingTab {
         })
       )
 
+    containerEl.createEl('h3', { text: '同步范围' })
+
+    new Setting(containerEl)
+      .setName('范围模式')
+      .setDesc(
+        '「全库同步」下勾选的是不参与同步的文件夹；「仅同步勾选」下勾选的才参与同步。取消同步只是不再上传/下载，云端已有文件与本地文件都保留'
+      )
+      .addDropdown((d) =>
+        d
+          .addOption('all', '全库同步（勾选 = 不同步）')
+          .addOption('onlySelected', '仅同步勾选的文件夹')
+          .setValue(this.plugin.settings.syncScopeMode)
+          .onChange(async (v) => {
+            this.plugin.settings.syncScopeMode = v as SyncScopeMode
+            await this.plugin.saveSettings()
+            this.display()
+          })
+      )
+
+    this.renderFolderScope(containerEl)
+
     containerEl.createEl('h3', { text: '冲突与安全' })
 
     new Setting(containerEl)
@@ -218,5 +252,255 @@ export class SyncSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings()
           })
       )
+  }
+
+  /** 仓库里的全部文件夹（不含根），按路径排序 */
+  private folderList(): string[] {
+    return this.app.vault
+      .getAllLoadedFiles()
+      .filter((f): f is TFolder => f instanceof TFolder)
+      .map((f) => normFolder(f.path))
+      .filter((p) => !!p && p !== '/')
+      .sort((a, b) => a.localeCompare(b, 'zh'))
+  }
+
+  private isFolderChecked(path: string): boolean {
+    return (this.plugin.settings.scopeFolders || []).includes(path)
+  }
+
+  private async setScopeFolders(list: string[]): Promise<void> {
+    this.plugin.settings.scopeFolders = Array.from(
+      new Set(list.map(normFolder).filter((p) => !!p && p !== '/'))
+    ).sort()
+    await this.plugin.saveSettings()
+    this.display()
+  }
+
+  /** 文件夹树：父子关系、根列表、各文件夹的文件数（含子文件夹） */
+  private buildFolderTree(): {
+    folders: string[]
+    children: Map<string, string[]>
+    roots: string[]
+    count: Map<string, number>
+    rootFileCount: number
+  } {
+    const folders = this.folderList()
+    const folderSet = new Set(folders)
+    const children = new Map<string, string[]>()
+    const roots: string[] = []
+    for (const p of folders) {
+      const i = p.lastIndexOf('/')
+      if (i < 0 || !folderSet.has(p.slice(0, i))) {
+        roots.push(p)
+      } else {
+        const parent = p.slice(0, i)
+        const arr = children.get(parent) ?? []
+        arr.push(p)
+        children.set(parent, arr)
+      }
+    }
+
+    const agg = new Map<string, number>()
+    let rootFileCount = 0
+    for (const f of this.app.vault.getFiles()) {
+      const i = f.path.lastIndexOf('/')
+      if (i < 0) {
+        rootFileCount++
+        continue
+      }
+      const dir = f.path.slice(0, i)
+      agg.set(dir, (agg.get(dir) ?? 0) + 1)
+    }
+    // 由深到浅把子文件夹的文件数累加到父级
+    const count = new Map<string, number>()
+    const deepestFirst = folders.slice().sort((a, b) => b.split('/').length - a.split('/').length)
+    for (const p of deepestFirst) {
+      const v = agg.get(p) ?? 0
+      count.set(p, v)
+      const i = p.lastIndexOf('/')
+      if (i >= 0) {
+        const parent = p.slice(0, i)
+        agg.set(parent, (agg.get(parent) ?? 0) + v)
+      }
+    }
+    return { folders, children, roots, count, rootFileCount }
+  }
+
+  private descendantsOf(path: string, folders: string[]): string[] {
+    return folders.filter((f) => f.startsWith(path + '/'))
+  }
+
+  private renderFolderScope(containerEl: HTMLElement): void {
+    const onlySelected = this.plugin.settings.syncScopeMode === 'onlySelected'
+    const { folders, children, roots, count, rootFileCount } = this.buildFolderTree()
+
+    containerEl.createDiv({
+      cls: 'cos-sync-scope-hint',
+      text: onlySelected
+        ? '只同步勾选的文件夹（含其子文件夹）；点三角展开，点名字也能展开。'
+        : '勾选的文件夹不参与同步（含其子文件夹），其余照常同步；点三角展开，点名字也能展开。',
+    })
+
+    const summaryEl = containerEl.createDiv({ cls: 'cos-sync-scope-summary' })
+
+    const toolbar = containerEl.createDiv({ cls: 'cos-sync-scope-toolbar' })
+    const search = toolbar.createEl('input', {
+      cls: 'cos-sync-scope-search',
+      type: 'search',
+      placeholder: '搜索文件夹…',
+    })
+    search.value = this.scopeQuery
+
+    const addBtn = (label: string, onClick: () => void): void => {
+      const b = toolbar.createEl('button', { cls: 'cos-sync-scope-btn', text: label })
+      b.onclick = onClick
+    }
+    addBtn('展开', () => {
+      for (const p of folders) this.scopeExpanded.add(p)
+      draw()
+    })
+    addBtn('折叠', () => {
+      this.scopeExpanded.clear()
+      this.scopeQuery = ''
+      search.value = ''
+      draw()
+    })
+    addBtn('全选', () => void this.setScopeFolders(folders))
+    addBtn('全不选', () => void this.setScopeFolders([]))
+    addBtn('反选', () => void this.setScopeFolders(folders.filter((f) => !this.isFolderChecked(f))))
+
+    const box = containerEl.createDiv({ cls: 'cos-sync-folder-scope' })
+
+    const updateSummary = (): void => {
+      const selected = new Set(this.plugin.settings.scopeFolders || [])
+      const hasSelectedAncestor = (p: string): boolean => {
+        let i = p.lastIndexOf('/')
+        while (i >= 0) {
+          const parent = p.slice(0, i)
+          if (selected.has(parent)) return true
+          i = parent.lastIndexOf('/')
+        }
+        return false
+      }
+      // 只统计最上层被勾选的文件夹，避免父子重复计数
+      const topMost = folders.filter((p) => selected.has(p) && !hasSelectedAncestor(p))
+      const files = topMost.reduce((n, p) => n + (count.get(p) ?? 0), 0)
+      summaryEl.setText(
+        onlySelected
+          ? `已勾选 ${topMost.length} 个文件夹，约 ${files} 个文件参与同步` +
+              (this.plugin.settings.syncRootFiles ? `；根目录另有 ${rootFileCount} 个文件参与` : '')
+          : topMost.length === 0
+            ? '当前全库同步，没有排除任何文件夹'
+            : `已勾选 ${topMost.length} 个文件夹，约 ${files} 个文件不参与同步`
+      )
+    }
+
+    const draw = (): void => {
+      const scrollTop = box.scrollTop
+      box.empty()
+      const selected = new Set(this.plugin.settings.scopeFolders || [])
+      const q = this.scopeQuery.trim().toLowerCase()
+      const matches = (p: string): boolean => p.toLowerCase().includes(q)
+      const hasMatchingDescendant = (p: string): boolean =>
+        (children.get(p) ?? []).some((k) => matches(k) || hasMatchingDescendant(k))
+      const isOpen = (p: string): boolean =>
+        q ? hasMatchingDescendant(p) : this.scopeExpanded.has(p)
+
+      let shown = 0
+      const createRow = (p: string, depth: number): void => {
+        shown++
+        const kids = children.get(p) ?? []
+        const open = isOpen(p)
+        const row = box.createDiv({ cls: 'cos-sync-tree-row' })
+        row.style.paddingLeft = `${depth * 14}px`
+
+        const toggleOpen = (): void => {
+          if (this.scopeExpanded.has(p)) this.scopeExpanded.delete(p)
+          else this.scopeExpanded.add(p)
+          this.scopeQuery = ''
+          search.value = ''
+          draw()
+        }
+
+        if (kids.length > 0) {
+          const twisty = row.createEl('button', {
+            cls: 'clickable-icon cos-sync-twisty',
+            text: open ? '▾' : '▸',
+          })
+          twisty.setAttr('aria-label', open ? '折叠' : '展开')
+          twisty.onclick = (e) => {
+            e.preventDefault()
+            toggleOpen()
+          }
+        } else {
+          row.createDiv({ cls: 'cos-sync-twisty is-empty' })
+        }
+
+        // 勾选状态：父文件夹带上全部子孙一起算，部分勾选显示为半选
+        const subtree = [p, ...this.descendantsOf(p, folders)]
+        const checkedCount = subtree.filter((x) => selected.has(x)).length
+        const cb = row.createEl('input', { type: 'checkbox', cls: 'cos-sync-tree-check' })
+        cb.checked = checkedCount === subtree.length
+        cb.indeterminate = checkedCount > 0 && checkedCount < subtree.length
+        cb.onchange = () => {
+          const next = new Set(selected)
+          for (const x of subtree) {
+            if (cb.checked) next.add(x)
+            else next.delete(x)
+          }
+          this.plugin.settings.scopeFolders = Array.from(next).sort()
+          void this.plugin.saveSettings().then(() => {
+            draw()
+            updateSummary()
+          })
+        }
+
+        const name = row.createDiv({ cls: 'cos-sync-tree-name', text: p.split('/').pop() || p })
+        name.setAttr('title', p)
+        if (kids.length > 0) name.onclick = toggleOpen
+
+        row.createDiv({ cls: 'cos-sync-tree-count', text: String(count.get(p) ?? 0) })
+
+        if (open) {
+          for (const k of kids) {
+            if (q && !(matches(k) || hasMatchingDescendant(k))) continue
+            createRow(k, depth + 1)
+          }
+        }
+      }
+
+      for (const p of roots) {
+        if (q && !(matches(p) || hasMatchingDescendant(p))) continue
+        createRow(p, 0)
+      }
+      if (shown === 0) {
+        box.createDiv({
+          cls: 'cos-sync-scope-hint',
+          text: roots.length === 0 ? '仓库里还没有文件夹。' : '没有匹配的文件夹。',
+        })
+      }
+      box.scrollTop = scrollTop
+    }
+
+    search.oninput = () => {
+      this.scopeQuery = search.value
+      draw()
+    }
+
+    updateSummary()
+    draw()
+
+    if (onlySelected) {
+      new Setting(containerEl)
+        .setName('同步根目录散落文件')
+        .setDesc('根目录下、不属于任何文件夹的文件（如入口笔记）是否参与同步')
+        .addToggle((t) =>
+          t.setValue(this.plugin.settings.syncRootFiles).onChange(async (v) => {
+            this.plugin.settings.syncRootFiles = v
+            await this.plugin.saveSettings()
+            updateSummary()
+          })
+        )
+    }
   }
 }

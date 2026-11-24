@@ -1,5 +1,5 @@
 import { md5 } from 'js-md5'
-import { SyncSettings } from './settings'
+import type { SyncSettings } from './settings'
 
 export function md5Of(buf: ArrayBuffer | Uint8Array): string {
   return md5(buf instanceof Uint8Array ? buf : new Uint8Array(buf))
@@ -62,6 +62,38 @@ export function matchesGlob(path: string, pattern: string): boolean {
   }
 }
 
+/** 统一成不带首尾斜杠的 POSIX 相对路径 */
+export function normFolder(p: string): string {
+  return (p || '').replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '')
+}
+
+/** path 是否就是 folder 本身，或位于其子树内 */
+export function folderContains(folder: string, path: string): boolean {
+  const f = normFolder(folder)
+  if (!f) return false
+  return path === f || path.startsWith(f + '/')
+}
+
+/**
+ * 是否在用户设定的同步范围内。
+ * - all：勾选的文件夹不参与同步，其余照常；
+ * - onlySelected：只有勾选的文件夹参与同步；
+ * .obsidian 由 syncDotObsidian 开关单独控制，不受此范围影响。
+ */
+export function isPathInSyncScope(path: string, settings: SyncSettings): boolean {
+  const p = normFolder(path)
+  if (!p) return true
+  if (p === '.obsidian' || p.startsWith('.obsidian/')) return true
+
+  const folders = (settings.scopeFolders || []).map(normFolder).filter(Boolean)
+  if ((settings.syncScopeMode || 'all') === 'onlySelected') {
+    // 根目录散落文件由 syncRootFiles 单独决定
+    if (!p.includes('/')) return settings.syncRootFiles !== false
+    return folders.some((f) => folderContains(f, p))
+  }
+  return !folders.some((f) => folderContains(f, p))
+}
+
 export function isExcludedPath(path: string, settings: SyncSettings): boolean {
   const p = path.replace(/\\/g, '/')
 
@@ -97,6 +129,9 @@ export function isExcludedPath(path: string, settings: SyncSettings): boolean {
   }
   // 常见临时 / 备份文件
   if (name.endsWith('.tmp') || name.endsWith('.bak') || name.endsWith('.swp')) return true
+
+  // 用户设定的同步范围（文件夹勾选）：范围外的一律不参与同步
+  if (!isPathInSyncScope(p, settings)) return true
 
   // 用户自定义排除（每行一条，支持通配符）
   for (const pat of settings.extraExclude || []) {

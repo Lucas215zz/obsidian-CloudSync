@@ -93,11 +93,14 @@ export class SyncEngine {
     }
 
     // 2. Remote objects
+    // 被排除或不在同步范围内的云端对象直接忽略：既不下载回本地，也不当作「本地已删除」去删云端，
+    // 而是原样冻结在桶里（勾回来还能接着比对）。
     const remoteMap = new Map<string, string>()
     const remoteList = await this.client.listAll(prefix)
     for (const o of remoteList) {
       const rel = o.key.startsWith(prefix) ? o.key.slice(prefix.length) : o.key
       if (!rel) continue
+      if (isExcludedPath(rel, settings)) continue
       remoteMap.set(rel, o.etag)
     }
 
@@ -105,7 +108,11 @@ export class SyncEngine {
     const keys = new Set<string>()
     localMap.forEach((_, k) => keys.add(k))
     remoteMap.forEach((_, k) => keys.add(k))
-    this.state.keys().forEach((k) => keys.add(k))
+    // 历史状态里属于当前同步范围外的条目保持原样，不参与比对：
+    // 否则会被误判成「本地已删除」，进而删掉云端对象或反过来回灌本地。
+    this.state.keys().forEach((k) => {
+      if (!isExcludedPath(k, settings)) keys.add(k)
+    })
 
     const localMd5Cache = new Map<string, string>()
     const remoteMd5Cache = new Map<string, string>()

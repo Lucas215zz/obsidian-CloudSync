@@ -1,1 +1,98 @@
-/* Tencent COS Sync — no custom styles required */
+/* Tencent COS Sync - folder scope picker */
+
+.cos-sync-scope-hint {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  margin: 0 0 8px;
+  line-height: 1.5;
+}
+
+.cos-sync-scope-summary {
+  color: var(--text-normal);
+  font-size: var(--font-ui-smaller);
+  margin: 0 0 8px;
+}
+
+.cos-sync-scope-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.cos-sync-scope-search {
+  flex: 1 1 180px;
+  min-width: 140px;
+}
+
+.cos-sync-scope-btn {
+  padding: 2px 10px;
+  font-size: var(--font-ui-smaller);
+  box-shadow: none;
+}
+
+.cos-sync-folder-scope {
+  max-height: 360px;
+  overflow-y: auto;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  padding: 6px;
+  margin: 0 0 16px;
+  background: var(--background-secondary);
+}
+
+.cos-sync-tree-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+  padding: 1px 6px;
+  border-radius: var(--radius-s);
+}
+
+.cos-sync-tree-row:hover {
+  background: var(--background-modifier-hover);
+}
+
+.cos-sync-twisty {
+  flex: 0 0 18px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  font-size: 10px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.cos-sync-twisty.is-empty {
+  visibility: hidden;
+}
+
+.cos-sync-tree-check {
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+.cos-sync-tree-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--font-ui-small);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cos-sync-tree-count {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding-left: 8px;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
